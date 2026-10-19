@@ -2,8 +2,10 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from x402_fastapi_kit import PaymentApp, require_payment
 
+# Initialisation de l'application avec le kit de paiement
 app = PaymentApp()
 
+# --- Modèles de données ---
 class ScreenRequest(BaseModel):
     entity_name: str
     threshold: float = 0.8
@@ -15,6 +17,7 @@ class ScreenResponse(BaseModel):
     program: str = None
     risk_score: float
 
+# --- Données de test ---
 SANCTIONS_LIST = [
     {"name": "Vladimir Putin", "program": "RUSSIA-EO14024"},
     {"name": "Kim Jong Un", "program": "DPRK"},
@@ -22,12 +25,22 @@ SANCTIONS_LIST = [
     {"name": "Saddam Hussein", "program": "IRAQ2"}
 ]
 
+# --- Routes ---
+
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
 
+# Route GET pour la validation (agentic.market)
+@app.get("/screen")
+@require_payment(price="$0.005", description="OFAC Sanctions Screening - GET discovery")
+def screen_get():
+    # Cette fonction ne s'exécute que si le paiement est validé
+    return {"message": "This is a paid endpoint. Use POST with a JSON body for actual screening."}
+
+# Route POST pour l'utilisation réelle (agents IA)
 @app.post("/screen", response_model=ScreenResponse)
-@require_payment(price="$0.005", description="OFAC Sanctions Screening") # <-- Le prix est ici
+@require_payment(price="$0.005", description="OFAC Sanctions Screening")
 def screen_entity(request: ScreenRequest):
     search_name = request.entity_name.lower().strip()
     if not search_name:
@@ -63,3 +76,8 @@ def screen_entity(request: ScreenRequest):
         entity_searched=request.entity_name,
         risk_score=highest_score
     )
+
+# --- Lancement local (pour tester sur ton PC) ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=9999)
