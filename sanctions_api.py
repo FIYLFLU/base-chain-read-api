@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException
+kkkfrom fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from x402.fastapi.middleware import require_payment
-from x402.types import TokenAmount, TokenAsset
+from x402.types import TokenAmount, TokenAsset, EIP712Domain
 
 app = FastAPI(
     title="OFAC Sanctions Screener API",
@@ -9,27 +9,56 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- CONFIGURATION DU PAIEMENT (USDC sur Base) ---
-# Adresse du contrat USDC sur le réseau Base Mainnet
+# --- CONFIGURATION DU PAIEMENT (USDC sur Base Mainnet) ---
+# Adresse du contrat USDC sur Base Mainnet
 USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
-# On utilise TokenAmount pour spécifier explicitement l'actif
-price_info = TokenAmount(
-    amount="0.005",  # Prix en USDC
-    asset=TokenAsset(address=USDC_BASE_ADDRESS)
+# Définition explicite de l'actif USDC avec ses métadonnées
+usdc_asset = TokenAsset(
+    address=USDC_BASE_ADDRESS,
+    decimals=6,
+    eip712=EIP712Domain(name="USD Coin", version="2")
 )
 
+# Définition du prix en USDC (0.005 USDC = 5000 unités atomiques)
+price_info = TokenAmount(
+    amount="5000",  # 5000 * 10^-6 = 0.005 USDC
+    asset=usdc_asset
+)
+
+# Schémas pour l'extension Bazaar (découverte automatique)
+input_schema = {
+    "type": "object",
+    "properties": {
+        "entity_name": {"type": "string", "description": "Nom de la personne ou entité à vérifier"},
+        "threshold": {"type": "number", "description": "Seuil de correspondance (0 à 1)", "default": 0.8}
+    },
+    "required": ["entity_name"]
+}
+
+output_schema = {
+    "type": "object",
+    "properties": {
+        "match": {"type": "boolean"},
+        "entity_searched": {"type": "string"},
+        "matched_name": {"type": "string"},
+        "program": {"type": "string"},
+        "risk_score": {"type": "number"}
+    }
+}
+
 # Application du middleware sur la route /screen
-# discoverable=True active l'extension Bazaar
 app.middleware("http")(
     require_payment(
         price=price_info,
-        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90", # Ton adresse
+        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",  # Ton adresse
         path="/screen",
         description="OFAC Sanctions Screening",
-        network="base", # Réseau principal (eip155:8453)
-        max_deadline_seconds=300, # Équivalent de maxTimeoutSeconds
-        discoverable=True # Active la découverte Bazaar
+        network="base",  # Force le réseau Base Mainnet (eip155:8453)
+        max_deadline_seconds=300,  # 5 minutes pour payer
+        discoverable=True,  # Active l'extension Bazaar
+        input_schema=input_schema,
+        output_schema=output_schema
     )
 )
 
@@ -58,9 +87,14 @@ SANCTIONS_LIST = [
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
 
+# Route GET pour la validation agentic.market (le middleware intercepte et renvoie 402)
+@app.get("/screen")
+def screen_get():
+    return {"message": "This is a paid endpoint. Use POST with a JSON body."}
+
+# Route POST pour l'utilisation réelle par les agents IA
 @app.post("/screen", response_model=ScreenResponse)
 def screen_entity(request: ScreenRequest):
-    # Cette route est protégée par le middleware ci-dessus
     search_name = request.entity_name.lower().strip()
     if not search_name:
         raise HTTPException(status_code=400, detail="Le nom ne peut pas être vide.")
