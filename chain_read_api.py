@@ -1,11 +1,11 @@
 import os
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from web3 import Web3
 from dotenv import load_dotenv
 
 from x402 import x402ResourceServer
-from x402.http import FacilitatorConfig, HTTPFacilitatorClient
+from x402.http import FacilitatorConfig, HTTPFacilitatorClient, AuthHeaders
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
 from x402.http.types import RouteConfig, PaymentOption
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
@@ -19,20 +19,22 @@ PAY_TO = os.getenv("PAY_TO_ADDRESS")
 BASE_RPC_URL = os.getenv("BASE_RPC_URL", "https://mainnet.base.org")
 w3 = Web3(Web3.HTTPProvider(BASE_RPC_URL))
 
-# --- Configuration du facilitateur CDP ---
-# Récupère ces valeurs depuis portal.cdp.coinbase.com
-# --- Configuration du facilitateur CDP ---
-# --- Configuration du facilitateur CDP ---
+# --- Classe d'authentification personnalisée pour CDP ---
 CDP_API_KEY_SECRET = os.getenv("CDP_API_KEY_SECRET")
 
-def create_cdp_headers():
-    """Fonction qui génère le header d'authentification pour Coinbase CDP."""
-    return {"Authorization": f"Bearer {CDP_API_KEY_SECRET}"}
+class CdpAuthProvider:
+    async def get_auth_headers(self) -> AuthHeaders:
+        return AuthHeaders(
+            verify={"Authorization": f"Bearer {CDP_API_KEY_SECRET}"},
+            settle={"Authorization": f"Bearer {CDP_API_KEY_SECRET}"},
+            supported={}
+        )
 
+# --- Configuration du facilitateur CDP ---
 facilitator = HTTPFacilitatorClient(
     FacilitatorConfig(
         url="https://api.cdp.coinbase.com/platform/v2/x402",
-        create_headers=create_cdp_headers
+        auth_provider=CdpAuthProvider()
     )
 )
 server = x402ResourceServer(facilitator)
@@ -92,7 +94,6 @@ class BalanceRequest(BaseModel):
 def read_root():
     return {"status": "online", "service": "Base Chain Read API"}
 
-# Route POST (le vrai service)
 @app.post("/read-balance")
 async def read_balance(request: BalanceRequest):
     try:
@@ -106,7 +107,6 @@ async def read_balance(request: BalanceRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Routes GET et HEAD pour la validation (renvoient le 402 via le middleware)
 @app.get("/read-balance")
 async def read_balance_get():
     return {"message": "Endpoint payant. Utilisez POST avec un corps JSON."}
