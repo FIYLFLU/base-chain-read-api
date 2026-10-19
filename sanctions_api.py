@@ -9,67 +9,41 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Récupération de ton adresse depuis les variables d'environnement de Render
 PAY_TO = os.getenv("X402_PAY_TO", "0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90")
 
-# Adresse du contrat USDC sur le réseau Base Mainnet
-USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+# Schémas pour la découverte Bazaar (le validateur les exige)
+input_schema = {
+    "type": "object",
+    "properties": {
+        "entity_name": {"type": "string", "description": "Nom de la personne ou entité à vérifier"},
+        "threshold": {"type": "number", "description": "Seuil de correspondance (0 à 1)", "default": 0.8}
+    },
+    "required": ["entity_name"]
+}
 
-# --- CONFIGURATION DE L'EXTENSION BAZAAR (Découverte) ---
-# Le validateur exige ce format exact pour indexer ton API
-bazaar_config = {
-    "bazaar": {
-        "info": {
-            "input": {
-                "type": "http",
-                "method": "POST",
-                "body": {
-                    "entity_name": "Vladimir Putin",
-                    "threshold": 0.8
-                }
-            },
-            "output": {
-                "match": True,
-                "entity_searched": "Vladimir Putin",
-                "matched_name": "Vladimir Putin",
-                "program": "RUSSIA-EO14024",
-                "risk_score": 0.95
-            }
-        },
-        "schema": {
-            "input": {
-                "type": "object",
-                "properties": {
-                    "entity_name": {"type": "string"},
-                    "threshold": {"type": "number"}
-                },
-                "required": ["entity_name"]
-            },
-            "output": {
-                "type": "object",
-                "properties": {
-                    "match": {"type": "boolean"},
-                    "entity_searched": {"type": "string"},
-                    "matched_name": {"type": "string"},
-                    "program": {"type": "string"},
-                    "risk_score": {"type": "number"}
-                }
-            }
-        }
+output_schema = {
+    "type": "object",
+    "properties": {
+        "match": {"type": "boolean"},
+        "entity_searched": {"type": "string"},
+        "matched_name": {"type": "string"},
+        "program": {"type": "string"},
+        "risk_score": {"type": "number"}
     }
 }
 
-# --- APPLICATION DU MIDDLEWARE ---
+# --- APPLICATION DU MIDDLEWARE (syntaxe officielle) ---
 app.middleware("http")(
     require_payment(
-        price="0.005",               # Prix en USDC
-        asset=USDC_BASE_CONTRACT,    # Contrat USDC explicite (corrige l'erreur "L'actif '' n'est pas un USDC")
-        pay_to_address=PAY_TO,       # Ton adresse
-        path="/screen",              # Route protégée
-        network="base",              # Réseau principal
+        price="0.005",                  # Prix en USDC
+        pay_to_address=PAY_TO,          # Adresse de réception
+        path="/screen",                 # Route protégée
+        network="base",                 # Réseau principal (eip155:8453)
         description="OFAC Sanctions Screening",
-        max_timeout_seconds=300,     # Corrige l'erreur "maxTimeoutSeconds manquant"
-        extensions=bazaar_config     # Active la découverte Bazaar
+        max_deadline_seconds=300,       # 5 minutes pour payer
+        input_schema=input_schema,      # Schéma d'entrée (découverte)
+        output_schema=output_schema,    # Schéma de sortie (découverte)
+        discoverable=True               # Active l'indexation Bazaar
     )
 )
 
@@ -100,7 +74,6 @@ def read_root():
 
 @app.get("/screen")
 def screen_get():
-    # Le middleware intercepte cette requête avant d'arriver ici
     return {"message": "This is a paid endpoint. Use POST."}
 
 @app.post("/screen", response_model=ScreenResponse)
