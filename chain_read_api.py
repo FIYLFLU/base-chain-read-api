@@ -22,12 +22,17 @@ w3 = Web3(Web3.HTTPProvider(BASE_RPC_URL))
 # --- Configuration du facilitateur CDP ---
 # Récupère ces valeurs depuis portal.cdp.coinbase.com
 # --- Configuration du facilitateur CDP ---
+# --- Configuration du facilitateur CDP ---
 CDP_API_KEY_SECRET = os.getenv("CDP_API_KEY_SECRET")
+
+def create_cdp_headers():
+    """Fonction qui génère le header d'authentification pour Coinbase CDP."""
+    return {"Authorization": f"Bearer {CDP_API_KEY_SECRET}"}
 
 facilitator = HTTPFacilitatorClient(
     FacilitatorConfig(
         url="https://api.cdp.coinbase.com/platform/v2/x402",
-        headers={"Authorization": f"Bearer {CDP_API_KEY_SECRET}"}
+        create_headers=create_cdp_headers
     )
 )
 server = x402ResourceServer(facilitator)
