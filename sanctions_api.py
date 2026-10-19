@@ -1,63 +1,71 @@
 import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from x402.fastapi.middleware import require_payment
-from x402.extensions.bazaar import declare_discovery_extension
 
-app = FastAPI(
-    title="OFAC Sanctions Screener API",
-    description="Vérifie si un nom figure sur la liste des sanctions de l'OFAC.",
-    version="1.0.0"
-)
+from x402 import x402ResourceServer
+from x402.http import FacilitatorConfig, HTTPFacilitatorClient
+from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+from x402.http.types import RouteConfig, PaymentOption
+from x402.mechanisms.evm.exact import ExactEvmServerScheme
+from x402.extensions.bazaar import declareDiscoveryExtension
+
+app = FastAPI(title="OFAC Sanctions Screener API", version="1.0.0")
 
 PAY_TO = os.getenv("X402_PAY_TO", "0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90")
+NETWORK = "eip155:8453"  # Base Mainnet
+FACILITATOR_URL = "https://x402.org/facilitator"
 
-# --- DÉCLARATION DE L'EXTENSION BAZAAR (Découverte) ---
+# --- Schémas Bazaar ---
 input_schema = {
     "type": "object",
     "properties": {
         "entity_name": {"type": "string", "description": "Nom à vérifier"},
-        "threshold": {"type": "number", "description": "Seuil de correspondance (0 à 1)", "default": 0.8}
+        "threshold": {"type": "number", "default": 0.8}
     },
     "required": ["entity_name"]
 }
-
 output_schema = {
     "type": "object",
     "properties": {
         "match": {"type": "boolean"},
         "entity_searched": {"type": "string"},
-        "matched_name": {"type": "string"},
-        "program": {"type": "string"},
         "risk_score": {"type": "number"}
     }
 }
 
-# On déclare l'extension avec un exemple d'entrée/sortie
-bazaar_extension = declare_discovery_extension(
-    input={"entity_name": "Vladimir Putin", "threshold": 0.8},
-    input_schema=input_schema,
-    output={"match": True, "entity_searched": "Vladimir Putin", "risk_score": 0.95},
-    output_schema=output_schema
-)
+bazaar_ext = declareDiscoveryExtension({
+    "info": {
+        "input": {"entity_name": "Vladimir Putin", "threshold": 0.8},
+        "output": {"match": True, "entity_searched": "Vladimir Putin", "risk_score": 0.95}
+    },
+    "schema": {"input": input_schema, "output": output_schema}
+})
 
-# --- MIDDLEWARE DE PAIEMENT (syntaxe officielle) ---
-app.middleware("http")(
-    require_payment(
-        price="0.005",
-        pay_to_address=PAY_TO,
-        path="/screen",
-        network="base",
+# --- Configuration x402 ---
+facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=FACILITATOR_URL))
+server = x402ResourceServer(facilitator)
+server.register("eip155:*", ExactEvmServerScheme())
+
+routes = {
+    "POST /screen": RouteConfig(
+        accepts=[
+            PaymentOption(
+                scheme="exact",
+                network=NETWORK,
+                pay_to=PAY_TO,
+                price="$0.005",
+                extra={"name": "USDC", "version": "2"}
+            )
+        ],
+        mime_type="application/json",
         description="OFAC Sanctions Screening",
-        max_deadline_seconds=300,
-        input_schema=input_schema,
-        output_schema=output_schema,
-        discoverable=True,
-        extensions=bazaar_extension
+        extensions=bazaar_ext
     )
-)
+}
 
-# --- Modèles de données ---
+app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
+
+# --- Logique métier ---
 class ScreenRequest(BaseModel):
     entity_name: str
     threshold: float = 0.8
@@ -76,15 +84,9 @@ SANCTIONS_LIST = [
     {"name": "Saddam Hussein", "program": "IRAQ2"}
 ]
 
-# --- Routes ---
-
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
-
-@app.get("/screen")
-def screen_get():
-    return {"message": "This is a paid endpoint. Use POST with a JSON body."}
 
 @app.post("/screen", response_model=ScreenResponse)
 def screen_entity(request: ScreenRequest):
@@ -94,7 +96,6 @@ def screen_entity(request: ScreenRequest):
 
     best_match = None
     highest_score = 0.0
-
     for entry in SANCTIONS_LIST:
         target_name = entry["name"].lower()
         if search_name in target_name or target_name in search_name:
@@ -103,22 +104,14 @@ def screen_entity(request: ScreenRequest):
             score = 1.0
         else:
             score = 0.0
-
         if score > highest_score:
             highest_score = score
             best_match = entry
 
     if best_match and highest_score >= request.threshold:
         return ScreenResponse(
-            match=True,
-            entity_searched=request.entity_name,
-            matched_name=best_match["name"],
-            program=best_match["program"],
+            match=True, entity_searched=request.entity_name,
+            matched_name=best_match["name"], program=best_match["program"],
             risk_score=highest_score
         )
-
-    return ScreenResponse(
-        match=False,
-        entity_searched=request.entity_name,
-        risk_score=highest_score
-    )
+    return ScreenResponse(match=False, entity_searched=request.entity_name, risk_score=highest_score)
