@@ -1,4 +1,3 @@
-import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from x402.fastapi.middleware import require_payment
@@ -9,18 +8,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
-PAY_TO = os.getenv("X402_PAY_TO", "0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90")
-
-# Schémas pour la découverte Bazaar (le validateur les exige)
+# Schéma d'entrée (ce que l'agent envoie)
 input_schema = {
     "type": "object",
     "properties": {
-        "entity_name": {"type": "string", "description": "Nom de la personne ou entité à vérifier"},
+        "entity_name": {"type": "string", "description": "Nom à vérifier"},
         "threshold": {"type": "number", "description": "Seuil de correspondance (0 à 1)", "default": 0.8}
     },
     "required": ["entity_name"]
 }
 
+# Schéma de sortie (ce que l'API renvoie)
 output_schema = {
     "type": "object",
     "properties": {
@@ -32,17 +30,17 @@ output_schema = {
     }
 }
 
-# --- APPLICATION DU MIDDLEWARE (syntaxe officielle) ---
+# --- MIDDLEWARE DE PAIEMENT (syntaxe officielle) ---
 app.middleware("http")(
     require_payment(
         price="0.005",                  # Prix en USDC
-        pay_to_address=PAY_TO,          # Adresse de réception
-        path="/screen",                 # Route protégée
-        network="base",                 # Réseau principal (eip155:8453)
+        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",
+        path="/screen",
+        network="base",                 # Réseau principal (pas testnet)
         description="OFAC Sanctions Screening",
         max_deadline_seconds=300,       # 5 minutes pour payer
-        input_schema=input_schema,      # Schéma d'entrée (découverte)
-        output_schema=output_schema,    # Schéma de sortie (découverte)
+        input_schema=input_schema,
+        output_schema=output_schema,
         discoverable=True               # Active l'indexation Bazaar
     )
 )
@@ -67,14 +65,9 @@ SANCTIONS_LIST = [
 ]
 
 # --- Routes ---
-
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
-
-@app.get("/screen")
-def screen_get():
-    return {"message": "This is a paid endpoint. Use POST."}
 
 @app.post("/screen", response_model=ScreenResponse)
 def screen_entity(request: ScreenRequest):
@@ -88,7 +81,7 @@ def screen_entity(request: ScreenRequest):
     for entry in SANCTIONS_LIST:
         target_name = entry["name"].lower()
         if search_name in target_name or target_name in search_name:
-            score = 0.95 
+            score = 0.95
         elif search_name == target_name:
             score = 1.0
         else:
@@ -106,9 +99,13 @@ def screen_entity(request: ScreenRequest):
             program=best_match["program"],
             risk_score=highest_score
         )
-    
+
     return ScreenResponse(
         match=False,
         entity_searched=request.entity_name,
         risk_score=highest_score
     )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=9999)
