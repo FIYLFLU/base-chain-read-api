@@ -1,7 +1,7 @@
-kkkfrom fastapi import FastAPI, HTTPException
+import os
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from x402.fastapi.middleware import require_payment
-from x402.types import TokenAmount, TokenAsset, EIP712Domain
 
 app = FastAPI(
     title="OFAC Sanctions Screener API",
@@ -9,56 +9,67 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- CONFIGURATION DU PAIEMENT (USDC sur Base Mainnet) ---
-# Adresse du contrat USDC sur Base Mainnet
-USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+# Récupération de ton adresse depuis les variables d'environnement de Render
+PAY_TO = os.getenv("X402_PAY_TO", "0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90")
 
-# Définition explicite de l'actif USDC avec ses métadonnées
-usdc_asset = TokenAsset(
-    address=USDC_BASE_ADDRESS,
-    decimals=6,
-    eip712=EIP712Domain(name="USD Coin", version="2")
-)
+# Adresse du contrat USDC sur le réseau Base Mainnet
+USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
-# Définition du prix en USDC (0.005 USDC = 5000 unités atomiques)
-price_info = TokenAmount(
-    amount="5000",  # 5000 * 10^-6 = 0.005 USDC
-    asset=usdc_asset
-)
-
-# Schémas pour l'extension Bazaar (découverte automatique)
-input_schema = {
-    "type": "object",
-    "properties": {
-        "entity_name": {"type": "string", "description": "Nom de la personne ou entité à vérifier"},
-        "threshold": {"type": "number", "description": "Seuil de correspondance (0 à 1)", "default": 0.8}
-    },
-    "required": ["entity_name"]
-}
-
-output_schema = {
-    "type": "object",
-    "properties": {
-        "match": {"type": "boolean"},
-        "entity_searched": {"type": "string"},
-        "matched_name": {"type": "string"},
-        "program": {"type": "string"},
-        "risk_score": {"type": "number"}
+# --- CONFIGURATION DE L'EXTENSION BAZAAR (Découverte) ---
+# Le validateur exige ce format exact pour indexer ton API
+bazaar_config = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "POST",
+                "body": {
+                    "entity_name": "Vladimir Putin",
+                    "threshold": 0.8
+                }
+            },
+            "output": {
+                "match": True,
+                "entity_searched": "Vladimir Putin",
+                "matched_name": "Vladimir Putin",
+                "program": "RUSSIA-EO14024",
+                "risk_score": 0.95
+            }
+        },
+        "schema": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "entity_name": {"type": "string"},
+                    "threshold": {"type": "number"}
+                },
+                "required": ["entity_name"]
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "match": {"type": "boolean"},
+                    "entity_searched": {"type": "string"},
+                    "matched_name": {"type": "string"},
+                    "program": {"type": "string"},
+                    "risk_score": {"type": "number"}
+                }
+            }
+        }
     }
 }
 
-# Application du middleware sur la route /screen
+# --- APPLICATION DU MIDDLEWARE ---
 app.middleware("http")(
     require_payment(
-        price=price_info,
-        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",  # Ton adresse
-        path="/screen",
+        price="0.005",               # Prix en USDC
+        asset=USDC_BASE_CONTRACT,    # Contrat USDC explicite (corrige l'erreur "L'actif '' n'est pas un USDC")
+        pay_to_address=PAY_TO,       # Ton adresse
+        path="/screen",              # Route protégée
+        network="base",              # Réseau principal
         description="OFAC Sanctions Screening",
-        network="base",  # Force le réseau Base Mainnet (eip155:8453)
-        max_deadline_seconds=300,  # 5 minutes pour payer
-        discoverable=True,  # Active l'extension Bazaar
-        input_schema=input_schema,
-        output_schema=output_schema
+        max_timeout_seconds=300,     # Corrige l'erreur "maxTimeoutSeconds manquant"
+        extensions=bazaar_config     # Active la découverte Bazaar
     )
 )
 
@@ -87,12 +98,11 @@ SANCTIONS_LIST = [
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
 
-# Route GET pour la validation agentic.market (le middleware intercepte et renvoie 402)
 @app.get("/screen")
 def screen_get():
-    return {"message": "This is a paid endpoint. Use POST with a JSON body."}
+    # Le middleware intercepte cette requête avant d'arriver ici
+    return {"message": "This is a paid endpoint. Use POST."}
 
-# Route POST pour l'utilisation réelle par les agents IA
 @app.post("/screen", response_model=ScreenResponse)
 def screen_entity(request: ScreenRequest):
     search_name = request.entity_name.lower().strip()
@@ -129,7 +139,3 @@ def screen_entity(request: ScreenRequest):
         entity_searched=request.entity_name,
         risk_score=highest_score
     )
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9999)
