@@ -4,6 +4,24 @@ import requests
 import csv
 import io
 
+# --- NOUVEL IMPORT POUR X402 ---
+from x402.fastapi.middleware import require_payment
+
+app = FastAPI(
+    title="OFAC Sanctions Screener API",
+    description="Vérifie si un nom ou une entité figure sur la liste des sanctions de l'OFAC.",
+    version="1.0.0"
+)
+
+# --- NOUVEAU MIDDLEWARE DE PAIEMENT ---
+# ⚠️ REMPLACE l'adresse ci-dessous par la tienne (celle de ton wallet sur le réseau Base)
+app.middleware("http")(
+    require_payment(
+        price="0.005",  # Le prix en USDC par requête
+        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90", 
+        path="/screen" # On protège uniquement la route /screen
+    )
+)
 app = FastAPI(
     title="OFAC Sanctions Screener API",
     description="Vérifie si un nom ou une entité figure sur la liste des sanctions de l'OFAC.",
