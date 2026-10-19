@@ -1,5 +1,5 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
-x402-fastapi-kit
+x402[fastapi]
 requests>=2.31.0
 python-dotenv>=1.0.0

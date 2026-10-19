@@ -1,9 +1,37 @@
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from x402_fastapi_kit import PaymentApp, require_payment
+from x402.fastapi.middleware import require_payment
+from x402.types import TokenAmount, TokenAsset
 
-# Initialisation de l'application avec le kit de paiement
-app = PaymentApp()
+app = FastAPI(
+    title="OFAC Sanctions Screener API",
+    description="Vérifie si un nom figure sur la liste des sanctions de l'OFAC.",
+    version="1.0.0"
+)
+
+# --- CONFIGURATION DU PAIEMENT (USDC sur Base) ---
+# Adresse du contrat USDC sur le réseau Base Mainnet
+USDC_BASE_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+# On utilise TokenAmount pour spécifier explicitement l'actif
+price_info = TokenAmount(
+    amount="0.005",  # Prix en USDC
+    asset=TokenAsset(address=USDC_BASE_ADDRESS)
+)
+
+# Application du middleware sur la route /screen
+# discoverable=True active l'extension Bazaar
+app.middleware("http")(
+    require_payment(
+        price=price_info,
+        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90", # Ton adresse
+        path="/screen",
+        description="OFAC Sanctions Screening",
+        network="base", # Réseau principal (eip155:8453)
+        max_deadline_seconds=300, # Équivalent de maxTimeoutSeconds
+        discoverable=True # Active la découverte Bazaar
+    )
+)
 
 # --- Modèles de données ---
 class ScreenRequest(BaseModel):
@@ -17,7 +45,6 @@ class ScreenResponse(BaseModel):
     program: str = None
     risk_score: float
 
-# --- Données de test ---
 SANCTIONS_LIST = [
     {"name": "Vladimir Putin", "program": "RUSSIA-EO14024"},
     {"name": "Kim Jong Un", "program": "DPRK"},
@@ -31,17 +58,9 @@ SANCTIONS_LIST = [
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
 
-# Route GET pour la validation (agentic.market)
-@app.get("/screen")
-@require_payment(price="$0.005", description="OFAC Sanctions Screening - GET discovery")
-def screen_get():
-    # Cette fonction ne s'exécute que si le paiement est validé
-    return {"message": "This is a paid endpoint. Use POST with a JSON body for actual screening."}
-
-# Route POST pour l'utilisation réelle (agents IA)
 @app.post("/screen", response_model=ScreenResponse)
-@require_payment(price="$0.005", description="OFAC Sanctions Screening")
 def screen_entity(request: ScreenRequest):
+    # Cette route est protégée par le middleware ci-dessus
     search_name = request.entity_name.lower().strip()
     if not search_name:
         raise HTTPException(status_code=400, detail="Le nom ne peut pas être vide.")
@@ -77,7 +96,6 @@ def screen_entity(request: ScreenRequest):
         risk_score=highest_score
     )
 
-# --- Lancement local (pour tester sur ton PC) ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9999)
