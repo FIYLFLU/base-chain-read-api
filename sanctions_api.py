@@ -1,25 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from pydantic import BaseModel
-import requests
-import csv
-import io
-from x402.fastapi.middleware import require_payment  # L'import est correct
+from x402_fastapi_kit import PaymentApp, require_payment
 
-app = FastAPI(
-    title="OFAC Sanctions Screener API",
-    description="Vérifie si un nom ou une entité figure sur la liste des sanctions de l'OFAC.",
-    version="1.0.0"
-)
+app = PaymentApp()
 
-# --- MIDDLEWARE DE PAIEMENT ---
-app.middleware("http")(
-    require_payment(
-        price="0.005",
-        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",  # Ton adresse
-        path="/screen"
-    )
-)
-# ------------------------------
 class ScreenRequest(BaseModel):
     entity_name: str
     threshold: float = 0.8
@@ -40,9 +24,10 @@ SANCTIONS_LIST = [
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "service": "OFAC Screener", "price_per_request": "0.005 USDC"}
+    return {"status": "online", "service": "OFAC Screener"}
 
 @app.post("/screen", response_model=ScreenResponse)
+@require_payment(price="$0.005", description="OFAC Sanctions Screening") # <-- Le prix est ici
 def screen_entity(request: ScreenRequest):
     search_name = request.entity_name.lower().strip()
     if not search_name:
@@ -53,7 +38,6 @@ def screen_entity(request: ScreenRequest):
 
     for entry in SANCTIONS_LIST:
         target_name = entry["name"].lower()
-        
         if search_name in target_name or target_name in search_name:
             score = 0.95 
         elif search_name == target_name:
@@ -79,9 +63,3 @@ def screen_entity(request: ScreenRequest):
         entity_searched=request.entity_name,
         risk_score=highest_score
     )
-
-if __name__ == "__main__":
-    import uvicorn
-    import os
-    port = int(os.environ.get("PORT", 9999))
-    uvicorn.run(app, host="0.0.0.0", port=port)
