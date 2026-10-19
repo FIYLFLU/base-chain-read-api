@@ -19,11 +19,11 @@ PAY_TO = os.getenv("PAY_TO_ADDRESS")
 BASE_RPC_URL = os.getenv("BASE_RPC_URL", "https://mainnet.base.org")
 w3 = Web3(Web3.HTTPProvider(BASE_RPC_URL))
 
-# --- Classe d'authentification personnalisée pour CDP ---
+# --- Classe d'authentification (SYNCHRONE, sans 'async') ---
 CDP_API_KEY_SECRET = os.getenv("CDP_API_KEY_SECRET")
 
 class CdpAuthProvider:
-    async def get_auth_headers(self) -> AuthHeaders:
+    def get_auth_headers(self) -> AuthHeaders:
         return AuthHeaders(
             verify={"Authorization": f"Bearer {CDP_API_KEY_SECRET}"},
             settle={"Authorization": f"Bearer {CDP_API_KEY_SECRET}"},
@@ -65,9 +65,9 @@ bazaar_ext = declare_discovery_extension(
     )
 )
 
-# --- Configuration de la route payante ---
+# --- Configuration de la route (Méthode GET avec adresse dans l'URL) ---
 routes = {
-    "POST /read-balance": RouteConfig(
+    "GET /read-balance/{address}": RouteConfig(
         accepts=[
             PaymentOption(
                 scheme="exact",
@@ -85,32 +85,24 @@ routes = {
 
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
 
-# --- Modèles ---
-class BalanceRequest(BaseModel):
-    address: str
-
 # --- Routes ---
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "Base Chain Read API"}
 
-@app.post("/read-balance")
-async def read_balance(request: BalanceRequest):
+# On utilise GET et on récupère l'adresse depuis l'URL
+@app.get("/read-balance/{address}")
+async def read_balance(address: str):
     try:
-        if not w3.is_address(request.address):
+        if not w3.is_address(address):
             raise HTTPException(status_code=400, detail="Adresse invalide")
+        
         usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
         abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]'
+        
         contract = w3.eth.contract(address=usdc_address, abi=abi)
-        balance_wei = contract.functions.balanceOf(request.address).call()
-        return {"address": request.address, "token": "USDC", "balance": balance_wei / 10**6}
+        balance_wei = contract.functions.balanceOf(address).call()
+        
+        return {"address": address, "token": "USDC", "balance": balance_wei / 10**6}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/read-balance")
-async def read_balance_get():
-    return {"message": "Endpoint payant. Utilisez POST avec un corps JSON."}
-
-@app.head("/read-balance")
-async def read_balance_head():
-    return {"message": "Endpoint payant. Utilisez POST."}
