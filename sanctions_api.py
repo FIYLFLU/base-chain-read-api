@@ -1,10 +1,9 @@
-
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 import csv
 import io
-from x402.fastapi import require_payment
+from x402.fastapi.middleware import require_payment
 
 app = FastAPI(
     title="OFAC Sanctions Screener API",
@@ -12,27 +11,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# --- MIDDLEWARE DE PAIEMENT X402 ---
-@app.middleware("http")
-async def x402_middleware(request: Request, call_next):
-    # On protège uniquement la route /screen
-    if request.url.path == "/screen":
-        return await require_payment(
-            request=request,
-            call_next=call_next,
-            price="$0.005",
-            pay_to="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",  # <-- COLLE TON ADRESSE ICI (garde les guillemets)
-            network="base"
-        )
-    return await call_next(request)
-# -----------------------------------    description="Vérifie si un nom ou une entité figure sur la liste des sanctions de l'OFAC.",
-    version="1.0.0"
+# --- MIDDLEWARE DE PAIEMENT ---
+# Remplace "0xTON_ADRESSE_DE_PORTEFEUILLE" par ton adresse Base
+app.middleware("http")(
+    require_payment(
+        price="0.005",
+        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",
+        path="/screen"
+    )
 )
+# ------------------------------
 
-# --- Modèles de données ---
 class ScreenRequest(BaseModel):
     entity_name: str
-    threshold: float = 0.8 # Seuil de correspondance (0 à 1)
+    threshold: float = 0.8
 
 class ScreenResponse(BaseModel):
     match: bool
@@ -41,8 +33,6 @@ class ScreenResponse(BaseModel):
     program: str = None
     risk_score: float
 
-# --- Base de données locale (Mock pour le test) ---
-# En production, on téléchargerait la vraie liste depuis treasury.gov
 SANCTIONS_LIST = [
     {"name": "Vladimir Putin", "program": "RUSSIA-EO14024"},
     {"name": "Kim Jong Un", "program": "DPRK"},
@@ -56,23 +46,18 @@ def read_root():
 
 @app.post("/screen", response_model=ScreenResponse)
 def screen_entity(request: ScreenRequest):
-    """
-    Endpoint principal appelé par les agents IA.
-    """
     search_name = request.entity_name.lower().strip()
     if not search_name:
         raise HTTPException(status_code=400, detail="Le nom ne peut pas être vide.")
 
-    # Simulation d'un algorithme de matching (dans la réalité, on utiliserait RapidFuzz ou Levenshtein)
     best_match = None
     highest_score = 0.0
 
     for entry in SANCTIONS_LIST:
         target_name = entry["name"].lower()
         
-        # Logique simple : si le nom recherché est contenu dans le nom cible (ou vice-versa)
         if search_name in target_name or target_name in search_name:
-            score = 0.95 # Score de confiance élevé
+            score = 0.95 
         elif search_name == target_name:
             score = 1.0
         else:
@@ -82,7 +67,6 @@ def screen_entity(request: ScreenRequest):
             highest_score = score
             best_match = entry
 
-    # On vérifie si le score dépasse le seuil demandé par l'agent
     if best_match and highest_score >= request.threshold:
         return ScreenResponse(
             match=True,
@@ -98,7 +82,6 @@ def screen_entity(request: ScreenRequest):
         risk_score=highest_score
     )
 
-# --- Pour lancer le serveur ---
 if __name__ == "__main__":
     import uvicorn
     import os
