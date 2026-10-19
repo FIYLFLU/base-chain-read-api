@@ -1,55 +1,112 @@
-from fastapi import FastAPI, HTTPException
-from fastapi_x402 import init_x402, pay
 import os
-from web3 import Web3
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
+from web3 import Web3
+from dotenv import load_dotenv
+
+from x402 import x402ResourceServer
+from x402.http import FacilitatorConfig, HTTPFacilitatorClient
+from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+from x402.http.types import RouteConfig, PaymentOption
+from x402.mechanisms.evm.exact import ExactEvmServerScheme
+from x402.extensions.bazaar import declare_discovery_extension, OutputConfig
+
+load_dotenv()
 
 app = FastAPI(title="Base Chain Read API")
 
-# --- Configuration ---
-# Récupération de l'adresse de réception et de l'URL du RPC depuis les variables d'environnement
 PAY_TO = os.getenv("PAY_TO_ADDRESS")
-BASE_RPC_URL = os.getenv("BASE_RPC_URL", "https://mainnet.base.org") # RPC public pour Base
+BASE_RPC_URL = os.getenv("BASE_RPC_URL", "https://mainnet.base.org")
 w3 = Web3(Web3.HTTPProvider(BASE_RPC_URL))
 
-# Initialisation de x402 (le middleware est ajouté automatiquement)
-# On utilise "base-sepolia" pour les tests, on passera à "base" en production
-init_x402(app, pay_to=PAY_TO, network="base")
+# --- Configuration du facilitateur CDP ---
+# Récupère ces valeurs depuis portal.cdp.coinbase.com
+CDP_API_KEY_ID = os.getenv("CDP_API_KEY_ID")
+CDP_API_KEY_SECRET = os.getenv("CDP_API_KEY_SECRET")
 
-# --- Modèle de données ---
+facilitator = HTTPFacilitatorClient(
+    FacilitatorConfig(
+        url="https://api.cdp.coinbase.com/platform/v2/x402",
+        api_key_id=CDP_API_KEY_ID,
+        api_key_secret=CDP_API_KEY_SECRET
+    )
+)
+server = x402ResourceServer(facilitator)
+server.register("eip155:*", ExactEvmServerScheme())
+
+# --- Schémas pour l'extension Bazaar ---
+input_schema = {
+    "type": "object",
+    "properties": {
+        "address": {"type": "string", "description": "Adresse du portefeuille à vérifier"}
+    },
+    "required": ["address"]
+}
+
+bazaar_ext = declare_discovery_extension(
+    input={"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"},
+    input_schema=input_schema,
+    output=OutputConfig(
+        example={"address": "0x...", "token": "USDC", "balance": 100.0},
+        schema={
+            "type": "object",
+            "properties": {
+                "address": {"type": "string"},
+                "token": {"type": "string"},
+                "balance": {"type": "number"}
+            }
+        }
+    )
+)
+
+# --- Configuration de la route payante ---
+routes = {
+    "POST /read-balance": RouteConfig(
+        accepts=[
+            PaymentOption(
+                scheme="exact",
+                network="eip155:8453",
+                pay_to=PAY_TO,
+                price="$0.003",
+                extra={"name": "USDC", "version": "2"}
+            )
+        ],
+        mime_type="application/json",
+        description="Lit le solde USDC d'une adresse sur Base",
+        extensions=bazaar_ext
+    )
+}
+
+app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
+
+# --- Modèles ---
 class BalanceRequest(BaseModel):
     address: str
 
-# --- Route protégée par le paiement ---
-@app.post("/read-balance")
-@pay("$0.003") # Prix de l'appel
-async def read_balance(request: BalanceRequest):
-    """
-    Lit le solde USDC d'une adresse sur la blockchain Base.
-    """
-    try:
-        # Vérification basique de l'adresse
-        if not w3.is_address(request.address):
-            raise HTTPException(status_code=400, detail="Adresse invalide")
-        
-        # Adresse du contrat USDC sur Base Mainnet
-        usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-        # ABI minimal pour la fonction balanceOf
-        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]'
-        
-        contract = w3.eth.contract(address=usdc_address, abi=abi)
-        balance_wei = contract.functions.balanceOf(request.address).call()
-        balance_usdc = balance_wei / 10**6 # USDC a 6 décimales
-        
-        return {
-            "address": request.address,
-            "token": "USDC",
-            "balance": balance_usdc
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# --- Route gratuite pour tester que le serveur fonctionne ---
+# --- Routes ---
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "Base Chain Read API"}
+
+# Route POST (le vrai service)
+@app.post("/read-balance")
+async def read_balance(request: BalanceRequest):
+    try:
+        if not w3.is_address(request.address):
+            raise HTTPException(status_code=400, detail="Adresse invalide")
+        usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]'
+        contract = w3.eth.contract(address=usdc_address, abi=abi)
+        balance_wei = contract.functions.balanceOf(request.address).call()
+        return {"address": request.address, "token": "USDC", "balance": balance_wei / 10**6}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Routes GET et HEAD pour la validation (renvoient le 402 via le middleware)
+@app.get("/read-balance")
+async def read_balance_get():
+    return {"message": "Endpoint payant. Utilisez POST avec un corps JSON."}
+
+@app.head("/read-balance")
+async def read_balance_head():
+    return {"message": "Endpoint payant. Utilisez POST."}
