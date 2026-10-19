@@ -1,4 +1,4 @@
-kfastapi>=0.115.0
+fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 x402[fastapi,evm,extensions]
 requests>=2.31.0
