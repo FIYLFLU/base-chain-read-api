@@ -7,7 +7,7 @@ from x402.http import FacilitatorConfig, HTTPFacilitatorClient
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
 from x402.http.types import RouteConfig, PaymentOption
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
-from x402.extensions.bazaar import declareDiscoveryExtension
+from x402.extensions.bazaar import declare_discovery_extension, OutputConfig
 
 app = FastAPI(title="OFAC Sanctions Screener API", version="1.0.0")
 
@@ -15,7 +15,7 @@ PAY_TO = os.getenv("X402_PAY_TO", "0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90")
 NETWORK = "eip155:8453"  # Base Mainnet
 FACILITATOR_URL = "https://x402.org/facilitator"
 
-# --- Schémas Bazaar ---
+# --- Schémas Bazaar (Input / Output) ---
 input_schema = {
     "type": "object",
     "properties": {
@@ -24,28 +24,30 @@ input_schema = {
     },
     "required": ["entity_name"]
 }
-output_schema = {
-    "type": "object",
-    "properties": {
-        "match": {"type": "boolean"},
-        "entity_searched": {"type": "string"},
-        "risk_score": {"type": "number"}
-    }
-}
 
-bazaar_ext = declareDiscoveryExtension({
-    "info": {
-        "input": {"entity_name": "Vladimir Putin", "threshold": 0.8},
-        "output": {"match": True, "entity_searched": "Vladimir Putin", "risk_score": 0.95}
-    },
-    "schema": {"input": input_schema, "output": output_schema}
-})
+# L'extension Bazaar est déclarée avec la fonction en snake_case
+bazaar_ext = declare_discovery_extension(
+    input={"entity_name": "Vladimir Putin", "threshold": 0.8},
+    input_schema=input_schema,
+    output=OutputConfig(
+        example={"match": True, "entity_searched": "Vladimir Putin", "risk_score": 0.95},
+        schema={
+            "type": "object",
+            "properties": {
+                "match": {"type": "boolean"},
+                "entity_searched": {"type": "string"},
+                "risk_score": {"type": "number"}
+            }
+        }
+    )
+)
 
-# --- Configuration x402 ---
+# --- Configuration du Facilitator et du Serveur x402 ---
 facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=FACILITATOR_URL))
 server = x402ResourceServer(facilitator)
 server.register("eip155:*", ExactEvmServerScheme())
 
+# --- Configuration de la Route Payante ---
 routes = {
     "POST /screen": RouteConfig(
         accepts=[
@@ -59,13 +61,14 @@ routes = {
         ],
         mime_type="application/json",
         description="OFAC Sanctions Screening",
-        extensions=bazaar_ext
+        extensions=bazaar_ext  # On attache l'extension Bazaar ici
     )
 }
 
+# --- Ajout du Middleware ---
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
 
-# --- Logique métier ---
+# --- Modèles de données ---
 class ScreenRequest(BaseModel):
     entity_name: str
     threshold: float = 0.8
@@ -84,6 +87,7 @@ SANCTIONS_LIST = [
     {"name": "Saddam Hussein", "program": "IRAQ2"}
 ]
 
+# --- Routes ---
 @app.get("/")
 def read_root():
     return {"status": "online", "service": "OFAC Screener"}
