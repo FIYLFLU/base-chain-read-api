@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import requests
 import csv
 import io
-from x402.fastapi.middleware import require_payment  # L'importation est correcte
+from x402.fastapi.middleware import require_payment  # L'import est correct
 
 app = FastAPI(
     title="OFAC Sanctions Screener API",
@@ -15,14 +15,11 @@ app = FastAPI(
 app.middleware("http")(
     require_payment(
         price="0.005",
-        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",  # <-- Colle bien ton adresse
-        path="/screen",
-        network="base"  # Ajoute ce paramètre pour cibler le réseau Base
+        pay_to_address="0x7F63FAeb5f7fe0Ab54809c82f8d88CB0dc320D90",  # Ton adresse
+        path="/screen"
     )
 )
-
 # ------------------------------
-
 class ScreenRequest(BaseModel):
     entity_name: str
     threshold: float = 0.8
